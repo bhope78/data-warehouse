@@ -1,0 +1,17 @@
+[project]
+name = "data-warehouse"
+version = "0.1.0"
+description = "Relocation data warehouse — cost of living, housing, jobs, and crime analytics"
+requires-python = ">=3.12"
+authors = [{ name = "Bryan Hope" }]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["ingestion/tests"]
+pythonpath = ["."]
