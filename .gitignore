@@ -1,42 +1,6 @@
-# Python
-__pycache__/
-*.pyc
-*.pyo
-.venv/
-venv/
-*.egg-info/
-dist/
-build/
-
-# Environment
+node_modules/
 .env
 .env.local
-.env.production
-
-# dbt
-dbt_project/target/
-dbt_project/dbt_packages/
-dbt_project/logs/
-dbt_project/profiles.yml
-
-# Data files (don't commit raw data)
-*.parquet
-!dbt_project/seeds/*.csv
-
-# Docker volumes
-docker/postgres/data/
-
-# Notebooks
-.ipynb_checkpoints/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
+*.log
+dist/
 .DS_Store
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/

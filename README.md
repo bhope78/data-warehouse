@@ -1,93 +1,160 @@
-# Relocation Data Warehouse
+# CATT Data Warehouse
 
-An end-to-end data pipeline and analytics platform to identify the best US cities to relocate to — based on cost of living, housing affordability, job availability, income, and crime statistics.
+ETL pipeline that extracts data from SharePoint Lists (Microsoft Graph API), stages in S3, transforms with AWS Glue, and loads into Amazon Redshift Serverless for Power BI reporting.
 
 ## Architecture
 
 ```
-[5 Public APIs] → [Python Ingestion] → [AWS Redshift / Postgres]
-                                              ↓
-                                    [dbt Transformations]
-                                              ↓
-                                    [Star Schema (Facts + Dims)]
-                                              ↓
-                          [Apache Superset + Folium Maps + Flask Site]
-```
-
-## Tech Stack
-
-| Layer | Tool |
-|---|---|
-| Ingestion | Python (requests, pandas) |
-| Warehouse | AWS Redshift (Postgres for local dev) |
-| Modeling | dbt (star schema) |
-| Visualization | Apache Superset |
-| Maps | Folium (choropleth) |
-| Charts | Chart.js |
-| Frontend | Flask |
-
-## Data Sources
-
-| Source | Data | API |
-|---|---|---|
-| Bureau of Labor Statistics | Wages, employment, unemployment | [BLS API](https://www.bls.gov/bls/api_features.htm) |
-| US Census Bureau | Income, housing, demographics | [Census API](https://www.census.gov/data/developers/data-sets.html) |
-| HUD | Fair market rents, affordability | [HUD API](https://www.hud.gov/program_offices/comm_planning/affordablehousing) |
-| FBI Crime Data | Crime rates by city/region | [FBI API](https://cde.ucr.cjis.gov/LATEST/webapp/#/pages/docApi) |
-| Numbeo | Cost of living indexes | [Numbeo API](https://www.numbeo.com/common/api.jsp) |
-
-## Data Model
-
-**Star schema** with geography as the central dimension:
-
-- `dim_geography` — cities, counties, states (FIPS codes, coordinates)
-- `dim_time` — date spine (year, quarter, month)
-- `fct_economics` — wages, employment, unemployment
-- `fct_housing` — rents, home values, affordability
-- `fct_crime` — crime rates per 100k
-- `fct_quality_of_life` — cost of living, composite scores
-
-## Quick Start
-
-```bash
-# Clone and setup
-git clone https://github.com/bhope78/data-warehouse.git
-cd data-warehouse
-make setup
-
-# Start local Postgres + Superset
-make up
-
-# Run ingestion (once implemented)
-make ingest
-
-# Run dbt models
-make dbt-run
-make dbt-test
-
-# Full pipeline refresh
-make refresh
+┌──────────────────────┐     ┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
+│  SharePoint Online   │     │    Amazon S3      │     │    AWS Glue      │     │    Redshift      │
+│  (Graph API)         │────▶│  (Raw JSON)       │────▶│  (PySpark ETL)   │────▶│  Serverless      │
+│                      │     │                   │     │                  │     │                  │
+│  • Episodes List     │     │  catt-pipeline/   │     │  • Clean nulls   │     │  catt.episodes   │
+│  • CATT Time List    │     │    raw/YYYY-MM-DD │     │  • Cast types    │     │  catt.catt_times │
+│  • Narrative List    │     │    /episodes.json  │     │  • snake_case    │     │  catt.narratives │
+│                      │     │    /catt-times.json│     │  • Upsert merge  │     │                  │
+│                      │     │    /narratives.json│     │                  │     │                  │
+└──────────────────────┘     └──────────────────┘     └──────────────────┘     └─────────┬────────┘
+                                                                                        │
+                                                                                        ▼
+                                                                               ┌──────────────────┐
+                                                                               │   Power BI       │
+                                                                               │   Desktop        │
+                                                                               │   (ODBC/DirectQ) │
+                                                                               └──────────────────┘
 ```
 
 ## Project Structure
 
 ```
-├── ingestion/          # Python scripts for each API data source
-├── dbt_project/        # dbt models, seeds, tests, macros
-├── frontend/           # Flask app with Folium maps
-├── docker/             # Docker Compose (Postgres, Superset)
-├── infrastructure/     # AWS Redshift provisioning
-├── scripts/            # Pipeline orchestration
-└── notebooks/          # Exploratory analysis
+├── src/
+│   └── sharepoint-extractor.js   # Node.js — Graph API → S3
+├── glue/
+│   ├── transform-episodes.py     # Glue ETL — episodes
+│   ├── transform-catt-times.py   # Glue ETL — CATT times
+│   └── transform-narratives.py   # Glue ETL — narratives
+├── redshift/
+│   └── schema.sql                # DDL for catt schema + tables
+├── scripts/
+│   └── setup-aws.sh              # Automated AWS infrastructure setup
+├── .env.example                  # Required environment variables
+└── package.json
 ```
 
-## Key Questions Answered
+## Prerequisites
 
-1. Which cities have the best salary-to-cost-of-living ratio for software engineers?
-2. Where is housing most affordable relative to local income?
-3. Which metros have low crime AND high job availability?
-4. How have housing prices changed year over year by region?
+### Azure AD App Registration
+1. Register an app in [Azure Entra ID](https://entra.microsoft.com)
+2. Grant **Application** permission: `Sites.Read.All` (Microsoft Graph)
+3. Grant admin consent for the tenant
+4. Create a client secret
+5. Note your `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and `AZURE_CLIENT_SECRET`
 
-## License
+### AWS
+- AWS CLI v2 configured with admin-level access
+- Default region: `us-west-2` (configurable via `AWS_REGION`)
 
-MIT
+## Setup & Deployment
+
+### 1. Install dependencies
+
+```bash
+npm install
+```
+
+### 2. Configure environment
+
+```bash
+cp .env.example .env
+# Fill in all required values — see .env.example for descriptions
+```
+
+### 3. Provision AWS infrastructure
+
+```bash
+bash scripts/setup-aws.sh
+```
+
+This creates:
+- S3 bucket for raw data and Glue scripts
+- IAM role for Glue with S3 + Redshift access
+- Redshift Serverless namespace + workgroup (8 RPU base capacity)
+- Three Glue ETL jobs with daily triggers (7:00 UTC)
+- Glue JDBC connection to Redshift
+
+### 4. Create Redshift schema
+
+Connect to Redshift via the AWS Console Query Editor v2 or psql and run:
+
+```sql
+-- Run the contents of redshift/schema.sql
+\i redshift/schema.sql
+```
+
+### 5. Run the extractor
+
+```bash
+# Dry run — fetches data but does not upload to S3
+npm run extract:dry-run
+
+# Full extraction — uploads JSON to S3
+npm run extract
+```
+
+### 6. Run Glue jobs
+
+Jobs run daily at 7:00 UTC automatically. To trigger manually:
+
+```bash
+aws glue start-job-run --job-name catt-transform-episodes
+aws glue start-job-run --job-name catt-transform-catt-times
+aws glue start-job-run --job-name catt-transform-narratives
+```
+
+## Scheduling the Extractor
+
+The extractor should run before the Glue triggers (which fire at 7:00 UTC):
+
+```bash
+# Example crontab entry — daily at 6:00 UTC
+0 6 * * * cd /path/to/data-warehouse && node src/sharepoint-extractor.js >> /var/log/catt-extract.log 2>&1
+```
+
+## Connecting Power BI to Redshift
+
+### Install the ODBC Driver
+Download the [Amazon Redshift ODBC driver](https://docs.aws.amazon.com/redshift/latest/mgmt/install-odbc-driver-windows.html)
+
+### Connect from Power BI Desktop
+1. **Get Data** → **Amazon Redshift**
+2. **Server**: `<workgroup>.<account-id>.<region>.redshift-serverless.amazonaws.com:5439`
+3. **Database**: `dev`
+4. **Data Connectivity mode**: DirectQuery (recommended) or Import
+5. **Credentials**: Redshift admin user (password stored in AWS Secrets Manager)
+6. Select tables from the `catt` schema
+
+### ODBC Connection String
+
+```
+Driver={Amazon Redshift ODBC Driver (x64)};
+Server=<your-workgroup>.<your-account-id>.<your-region>.redshift-serverless.amazonaws.com;
+Port=5439;
+Database=dev;
+UID=<admin-username>;
+PWD=<password-from-secrets-manager>;
+```
+
+## Data Sources
+
+| List | Description | Schedule |
+|------|-------------|----------|
+| Episodes List | Incident-level clinical + demographic data | Daily |
+| CATT Time List | Response time milestones from ESO | Daily |
+| Narrative List | Clinical narratives + chief complaints | Daily |
+
+## Security Notes
+
+- All credentials are loaded from environment variables — never commit `.env`
+- Redshift admin password is managed by AWS Secrets Manager
+- The SharePoint site ID and list IDs are resolved dynamically at runtime from `SHAREPOINT_SITE_URL`
+- The Glue connection password should reference Secrets Manager in production
